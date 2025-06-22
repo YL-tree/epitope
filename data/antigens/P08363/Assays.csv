@@ -1,0 +1,8 @@
+"Epitope ID","Sequence","Mapped Start Position","Mapped End Position","Identity","Subjects Tested","Subjects Responded","Assays Positive","Assays Negative","Response Freq.","Lower Bound of 95% CI","Upper Bound of 95% CI"
+"425663","ISQPPRYA","33","40","100%","1","1","1","0","1.00","0.04","1.00"
+"426698","PPRYA","36","40","100%","1","1","1","0","1.00","0.04","1.00"
+"428422","YAEAFRDDVRLRQIKR","81","96","100%","1","1","1","0","1.00","0.04","1.00"
+"423827","AEAFRDDVRLRQIK","82","95","100%","1","1","1","0","1.00","0.04","1.00"
+"425803","KKQSYNDAVRMSFTEF","201","216","100%","1","1","1","0","1.00","0.04","1.00"
+"427671","SYNDAVRMSF","204","213","100%","1","1","1","0","1.00","0.04","1.00"
+"428747","YNDAVRMSF","205","213","100%","1","1","1","0","1.00","0.04","1.00"

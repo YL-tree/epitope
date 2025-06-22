@@ -1,0 +1,2 @@
+"Epitope ID","Sequence","Mapped Start Position","Mapped End Position","Identity","Subjects Tested","Subjects Responded","Assays Positive","Assays Negative","Response Freq.","Lower Bound of 95% CI","Upper Bound of 95% CI"
+"418624","TYSPALNKMF","86","95","100%","1","1","1","0","1.00","0.04","1.00"

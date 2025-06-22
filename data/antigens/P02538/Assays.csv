@@ -1,0 +1,4 @@
+"Epitope ID","Sequence","Mapped Start Position","Mapped End Position","Identity","Subjects Tested","Subjects Responded","Assays Positive","Assays Negative","Response Freq.","Lower Bound of 95% CI","Upper Bound of 95% CI"
+"972466","FSSVSVSRSRGSGGLG","33","48","100%","18","11","1","0","0.61","0.39","0.79"
+"981522","SVSRSRGSGGLGGACG","37","52","100%","18","11","1","0","0.61","0.39","0.79"
+"981142","SRGSGGLGGACGGAGF","41","56","100%","18","9","1","0","0.50","0.29","0.70"
