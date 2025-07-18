@@ -27,6 +27,42 @@ class Antigens():
         else:
             print("Directory for esm encodings not found. Made new one.")
 
+    def extract_response_frequency_segments(self, df, column='response frequency', max_length=500):
+        """
+        从DataFrame中提取响应频率有值的片段
+        
+        参数:
+            df: 包含数据的DataFrame
+            column: 包含响应频率的列名（默认值为'response frequency'）
+            max_length: 每个片段的最大长度（默认值为500）
+        
+        返回:
+            包含响应频率有值片段的DataFrame列表
+        """
+        if column not in df.columns:
+            raise ValueError(f"Column '{column}' not found in DataFrame")
+        
+        # 创建有效标记列
+        valid_mask = df[column].notna()
+        
+        # 使用.loc避免SettingWithCopyWarning
+        df = df.copy()  # 创建副本以避免修改原DataFrame
+        df.loc[:, 'segment_id'] = (valid_mask & ~valid_mask.shift(1, fill_value=False)).cumsum()
+        
+        # 筛选有效行并按segment_id分组
+        segments = []
+        for _, group in df[valid_mask].groupby('segment_id'):
+            group = group.drop(columns=['segment_id'])
+            
+            # 检查长度是否超过限制
+            if len(group) > max_length:
+                # 按max_length大小拆分
+                for i in range(0, len(group), max_length):
+                    segments.append(group.iloc[i:i+max_length])
+            else:
+                segments.append(group)
+        
+        return segments
 
     def process_data(self):
         """
@@ -82,13 +118,19 @@ class Antigens():
         # position_list = []
         # sequences_length = []
         accs = []
+
+            
         for acc, value in merged_sequence.items():
-            y_list.append(value["antigen"])
-            x_list.append(value['response frequency'])
-            # position_list.append(value['position'])
-            # sequences_length.append(len(value))
-            accs.append(acc)
-        
+            # 提取response frequency有值的片段
+            # 如果有多个片段有值，则切割为多个片段
+            segments = self.extract_response_frequency_segments(value)
+            for idx, segment in enumerate(segments):
+                x_list.append(segment['response frequency'].tolist())
+                y_list.append(segment['antigen'].tolist())
+                # position_list.append(segment['position'].tolist())
+                # sequences_length.append(len(segment['antigen']))
+                accs.append(acc + '_' + str(idx))
+
         self.check_accepted_AAs(accs, y_list)
         # return x_list, y_list, position_list, sequences_length, accs
         return x_list, y_list, accs
@@ -122,7 +164,7 @@ class Antigens():
 
         #esm_representations = []
         #preparing batch for ESM2
-        upper_case_sequences = [''.join(s.tolist()).upper() for s in self.seqs]  # 修改这一行
+        upper_case_sequences = [''.join(s).upper() for s in self.seqs]  # 修改这一行
         data = list(zip(self.accs, upper_case_sequences))
         nr_seqs = len(data)
         batch_generator = self.tuple_generator(data)
