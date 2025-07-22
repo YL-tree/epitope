@@ -8,13 +8,28 @@ import torch
 
 
 class Antigens():
+    """
+    用于处理抗原序列数据的类。
+    
+    属性:
+        sequence_folder (Path): 包含氨基酸序列txt文件的文件夹路径。
+        antigen_folder (Path): 包含抗原信息csv文件的文件夹路径。
+        esm_encoding_dir (Path): 用于存储ESM-2编码的文件夹路径。
+
+        add_seq_len (bool): 是否添加序列长度特征。
+        antigens (pd.DataFrame): 包含抗原信息的DataFrame。
+        seqs (list): 包含氨基酸序列的列表。
+        accs (list): 包含抗原访问号的列表。
+        esm_encoding_paths (list): 包含ESM-2编码文件路径的列表。
+    """
     def __init__(self, sequence_folder, antigen_folder, esm_encoding_dir,
         add_seq_len=False):
         self.sequence_folder = sequence_folder
         self.antigen_folder = antigen_folder
         self.esm_encoding_dir = esm_encoding_dir
-        self.antigens, self.seqs, self.accs = self.process_data()
+        self.epitopes, self.seqs, self.accs = self.process_data()
         self.add_seq_len = add_seq_len
+        self.esm_encoding_paths = self.get_esm2_represention_on_accs_seqs()
         
         num_of_seqs = len(self.seqs)
         print(f"Number of sequences detected in fasta file: {num_of_seqs}")
@@ -26,6 +41,7 @@ class Antigens():
             print("Directory for esm encodings already there. Saving encodings there.")
         else:
             print("Directory for esm encodings not found. Made new one.")
+
 
     def extract_response_frequency_segments(self, df, column='response frequency', max_length=500):
         """
@@ -73,8 +89,8 @@ class Antigens():
             antigen_folder: 包含抗原csv文件的文件夹路径
         
         返回:
-            x_list: 响应频率列表
-            y_list: 抗原序列列表
+            epitope_list: 响应频率列表
+            amino_list: 氨基酸序列列表
             position_list: 位置信息列表
             sequences_length: 序列长度列表
             acc: 序列名称列表
@@ -113,10 +129,8 @@ class Antigens():
                 ], axis=1, ignore_index=False)
 
         # 预处理数据
-        x_list = []
-        y_list = []
-        # position_list = []
-        # sequences_length = []
+        epitope_list = []
+        amino_list = []
         accs = []
 
             
@@ -125,15 +139,15 @@ class Antigens():
             # 如果有多个片段有值，则切割为多个片段
             segments = self.extract_response_frequency_segments(value)
             for idx, segment in enumerate(segments):
-                x_list.append(segment['response frequency'].tolist())
-                y_list.append(segment['antigen'].tolist())
+                epitope_list.append(segment['response frequency'].tolist())
+                amino_list.append(segment['antigen'].tolist())
                 # position_list.append(segment['position'].tolist())
                 # sequences_length.append(len(segment['antigen']))
                 accs.append(acc + '_' + str(idx))
 
-        self.check_accepted_AAs(accs, y_list)
+        self.check_accepted_AAs(accs, amino_list)
         # return x_list, y_list, position_list, sequences_length, accs
-        return x_list, y_list, accs
+        return epitope_list, amino_list, accs
 
     def check_accepted_AAs(self, accs, sequences):
         accepted_AAs = set(["A", "R", "N", "D", "C", "Q", "E", "G", "H", "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"])
@@ -165,7 +179,7 @@ class Antigens():
         #esm_representations = []
         #preparing batch for ESM2
         upper_case_sequences = [''.join(s).upper() for s in self.seqs]  # 修改这一行
-        data = list(zip(self.accs, upper_case_sequences))
+        data = list(zip(self.accs, upper_case_sequences, self.epitopes))
         nr_seqs = len(data)
         batch_generator = self.tuple_generator(data)
         
@@ -173,10 +187,13 @@ class Antigens():
         enc_paths = []
 
         for b in batch_generator:
-
-            batch_labels, batch_strs, batch_tokens = batch_converter(b)
+        # 修改这一行，确保只传递(acc, sequence)给batch_converter
+            batch_data = [(item[0], item[1]) for item in b]
+            epitopes = [item[2] for item in b]
+            batch_labels, batch_strs, batch_tokens = batch_converter(batch_data)
             batch_lens = (batch_tokens != alphabet.padding_idx).sum(1)
             acc_names = batch_labels
+            # epitopes = b[2]
 
             # Extract per-residue representations
             with torch.no_grad():
@@ -190,8 +207,14 @@ class Antigens():
                 if self.add_seq_len:
                     esm_representation = self.add_seq_len_feature(esm_representation)
 
-                enc_path = self.esm_encoding_dir / f"{acc_names[i]}_{enc_id}.pt"
-                torch.save(esm_representation, enc_path)
+                enc_path = self.esm_encoding_dir / f"{acc_names[i]}.pt"
+                epitope = epitopes[i]
+                embedding_data = {
+                    'epitope': epitope,
+                    'esm_representation': esm_representation
+                }
+                # 将acc, epitope, esm_representation均保存进pt文件
+                torch.save(embedding_data, enc_path)
 
                 enc_paths.append(enc_path)
                 enc_id += 1
