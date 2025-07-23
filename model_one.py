@@ -16,6 +16,7 @@ from torch.nn import functional as F
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
+from torch.nn.utils.rnn import pad_sequence
 
 
 
@@ -79,13 +80,13 @@ class BepiPredDDPM(nn.Module):
         # t: 时间步 [B]
         t_embed = self.timestep_embed(t.unsqueeze(-1))  # [B, D]
         t_embed = t_embed.unsqueeze(1).expand(-1, x.size(1), -1)  # [B, L, D]
+        print(t_embed.shape, x.shape)
         x = torch.cat([x, t_embed], dim=-1)
         noise_pred = self.ffnn(x)  # 预测噪声 [B, L, D]
         
         # 若需联合表位分类
         epitope_prob = torch.sigmoid(self.classifier(x))  # [B, L, 1]
         return noise_pred, epitope_prob
-
 
 
 def eval_model(model, dataloader, device="cuda"):
@@ -125,8 +126,11 @@ class ESM2Dataset(Dataset):
 
     def __getitem__(self, idx):
         esm_embedding = self.esm_embeddings[idx]
-        epitope_label = torch.tensor(self.epitope_labels[idx], dtype=torch.float32)
+        epitope_label = self.epitope_labels[idx]
         return esm_embedding, epitope_label
+
+
+
 
 
 if __name__ == "__main__":

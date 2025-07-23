@@ -208,7 +208,7 @@ class Antigens():
                     esm_representation = self.add_seq_len_feature(esm_representation)
 
                 enc_path = self.esm_encoding_dir / f"{acc_names[i]}.pt"
-                epitope = epitopes[i]
+                epitope = torch.tensor(epitopes[i], dtype=torch.float32)
                 embedding_data = {
                     'epitope': epitope,
                     'esm_representation': esm_representation
