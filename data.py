@@ -7,6 +7,7 @@ import esm
 import torch
 
 
+
 class Antigens():
     """
     用于处理抗原序列数据的类。
@@ -232,9 +233,40 @@ class Antigens():
         
         return new_X
 
+class ESM2Dataset(Dataset):
+    def __init__(self, esm_encoding_dir):
+        self.esm_encoding_dir = esm_encoding_dir
+        self.esm_files = [f for f in os.listdir(esm_encoding_dir) if f.endswith('.pt')]
+        self.esm_embeddings, self.epitope_labels = self.load_data()
+
+    def load_data(self):
+        esm_embeddings = []
+        epitope_labels = []
+        for esm_file in self.esm_files:
+            data = torch.load(self.esm_encoding_dir / esm_file)
+            esm_embedding = data['esm_representation']
+            epitope_label = data['epitope']
+            esm_embeddings.append(esm_embedding)
+            epitope_labels.append(epitope_label)
+        return esm_embeddings, epitope_labels
+
+    def __len__(self):
+        return len(self.esm_files)
+
+    def __getitem__(self, idx):
+        esm_embedding = self.esm_embeddings[idx]
+        epitope_label = self.epitope_labels[idx]
+        return esm_embedding, epitope_label
+
+
+
+
 if __name__ == "__main__":
     sequence_folder = Path("data/sequence")
     antigen_folder = Path("data/antigens")
     esm_encoding_dir = Path("data/esm_encodings")
+    
     antigens = Antigens(sequence_folder, antigen_folder, esm_encoding_dir, add_seq_len=True)
+
+
     enc_paths = antigens.get_esm2_represention_on_accs_seqs()

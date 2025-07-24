@@ -18,7 +18,40 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import datasets, transforms
 from torch.nn.utils.rnn import pad_sequence
 
+ 
+ class Diffusion:
+    def __init__(self, timesteps=1000, beta_start=0.0001, beta_end=0.02, device=device):
+        self.timesteps = timesteps
+        self.beta_start = beta_start
+        self.beta_end = beta_end
+        self.device = device
+        
+        # 线性噪声调度（公式4）
+        self.betas = torch.linspace(self.beta_start, self.beta_end, self.timesteps, device=self.device)
+        self.alphas = 1. - self.betas
+        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)  # ᾱ_t（公式4推导）
+        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.)
+        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)  # √ᾱ_t
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)  # √(1-ᾱ_t)
+        
+        # 后验q(x_{t-1}|x_t,x_0)的计算（公式7）
+        self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
 
+    def extract(self, a, t, x_shape):
+        """从a中根据t提取系数并重塑使其能与x_shape广播"""
+        batch_size = t.shape[0]
+        out = a.gather(-1, t)
+        return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
+
+    def q_sample(self, x_start, t, noise=None):
+        """前向扩散过程：q(x_t | x_0)（公式4推导）"""
+        if noise is None:
+            noise = torch.randn_like(x_start)
+            
+        sqrt_alphas_cumprod_t = self.extract(self.sqrt_alphas_cumprod, t, x_start.shape)
+        sqrt_one_minus_alphas_cumprod_t = self.extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        
+        return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
 class MyDenseNetWithSeqLen(nn.Module):
     def __init__(self,
@@ -50,84 +83,87 @@ class MyDenseNetWithSeqLen(nn.Module):
                                       nn.Linear(fc2_size, fc3_size),
                                       nn.ReLU(),
                                       nn.Dropout(fc3_dropout),
-                                      nn.Linear(fc3_size, num_of_classes))
+                                      nn.Linear(fc3_size, esm_embedding_size))
     
     def forward(self, antigen):
         batch_size = antigen.size(0)
         seq_len = antigen.size(1)
+        print(antigen.shape)
         #convert dim (N, L, esm_embedding) --> (N*L, esm_embedding)
         output = torch.reshape(antigen, (batch_size*seq_len, self.esm_embedding_size))
-        output = self.ff_model(output)                                               
+        output = self.ff_model(output)  
+        #convert dim (N*L, esm_embedding) --> (N, L, esm_embedding)
+        output = torch.reshape(output, (batch_size, seq_len, self.esm_embedding_size))
+
         return output
 
 
+
 class BepiPredDDPM(nn.Module):
-    def __init__(self, esm_embedding_size=1280, timestep_dim=64):
+    def __init__(self, esm_embedding_size=1281, timestep_dim=64):
         super().__init__()
         # 时间步嵌入层
         self.timestep_embed = nn.Sequential(
-            nn.Linear(timestep_dim, esm_embedding_size),
+            nn.Linear(timestep_dim, timestep_dim * 2),
             nn.SiLU(),
-            nn.Linear(esm_embedding_size, esm_embedding_size)
+            nn.Linear(timestep_dim * 2, esm_embedding_size+1)
         )
         
-        # 继承 BepiPred-3.0 的 FFNN
-        self.ffnn = MyDenseNetWithSeqLen(esm_embedding_size=esm_embedding_size * 2)  # 输入拼接时间步信息
-        self.classifier = nn.Linear(esm_embedding_size, 1)  # 二分类
+        # 更强的特征提取主干（替换原FFNN）
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(esm_embed_size * 2, 1024),  # 输入拼接时间步
+            nn.ReLU(),
+            nn.LayerNorm(1024),
+            nn.Dropout(0.5),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.LayerNorm(512)
+        )
+        
+        # 噪声预测头（扩散任务）
+        self.noise_head = nn.Linear(512, esm_embedding_size)
+
+        
+        # 表位分类头（重点优化）
+        self.epitope_head = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.LayerNorm(256),
+            nn.Dropout(0.3),
+            nn.Linear(256, 1),
+            nn.Sigmoid())  # 输出概率
+        
+
+    def get_time_embedding(self, t, dim):
+        # t: 时间步张量, shape=(batch_size, 1)
+        # dim: 嵌入向量的维度
+        half_dim = dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, dtype=torch.float32) * -emb)
+        emb = t.float() * emb.unsqueeze(0).to(device)  
+        # emb.shape ==> (batch_size, half_dim)
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)  # shape=(batch_size, dim)
+        return emb.to(device)
 
     def forward(self, x, t):
         # x: 噪声化ESM嵌入 [B, L, D]
         # t: 时间步 [B]
-        t_embed = self.timestep_embed(t.unsqueeze(-1))  # [B, D]
+        t = t.unsqueeze(-1)
+        t_embed = self.get_time_embedding(t, dim=64)  # [B, D]
+        t_embed = self.timestep_embed(t_embed)
         t_embed = t_embed.unsqueeze(1).expand(-1, x.size(1), -1)  # [B, L, D]
-        print(t_embed.shape, x.shape)
-        x = torch.cat([x, t_embed], dim=-1)
+        # print(t_embed.shape, x.shape)
+        x = t_embed + x
+        # x = torch.cat([x, t_embed], dim=-1)
+        print(x.shape)
         noise_pred = self.ffnn(x)  # 预测噪声 [B, L, D]
-        
         # 若需联合表位分类
+        print(x.shape)
+        
         epitope_prob = torch.sigmoid(self.classifier(x))  # [B, L, 1]
         return noise_pred, epitope_prob
 
 
-def eval_model(model, dataloader, device="cuda"):
-    probs, labels = [], []
-    model.eval()
-    with torch.no_grad():
-        for x0, epitope_labels in dataloader:
-            _, epitope_prob = model(x0.to(device), torch.zeros(x0.size(0)).to(device))
-            probs.append(epitope_prob.cpu())
-            labels.append(epitope_labels.cpu())
-    
-    probs = torch.cat(probs).numpy()
-    labels = torch.cat(labels).numpy()
-    precision, recall, _ = precision_recall_curve(labels, probs)
-    pr_auc = auc(recall, precision)  # 更关注正类的指标
-    return pr_auc
-
-class ESM2Dataset(Dataset):
-    def __init__(self, esm_encoding_dir):
-        self.esm_encoding_dir = esm_encoding_dir
-        self.esm_files = [f for f in os.listdir(esm_encoding_dir) if f.endswith('.pt')]
-        self.esm_embeddings, self.epitope_labels = self.load_data()
-
-    def load_data(self):
-        esm_embeddings = []
-        epitope_labels = []
-        for esm_file in self.esm_files:
-            data = torch.load(self.esm_encoding_dir / esm_file)
-            esm_embedding = data['esm_representation']
-            epitope_label = data['epitope']
-            esm_embeddings.append(esm_embedding)
-            epitope_labels.append(epitope_label)
-        return esm_embeddings, epitope_labels
-
-    def __len__(self):
-        return len(self.esm_files)
-
-    def __getitem__(self, idx):
-        esm_embedding = self.esm_embeddings[idx]
-        epitope_label = self.epitope_labels[idx]
-        return esm_embedding, epitope_label
 
 
 
@@ -142,5 +178,4 @@ if __name__ == "__main__":
     model = BepiPredDDPM()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # 训练模型
-    train(model, dataloader, optimizer, epochs=10)
+    
