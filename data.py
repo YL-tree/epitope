@@ -187,7 +187,6 @@ class Antigens():
         enc_paths = []
 
         for b in batch_generator:
-        # 修改这一行，确保只传递(acc, sequence)给batch_converter
             batch_data = [(item[0], item[1]) for item in b]
             epitopes = [item[2] for item in b]
             batch_labels, batch_strs, batch_tokens = batch_converter(batch_data)
@@ -209,6 +208,7 @@ class Antigens():
 
                 enc_path = self.esm_encoding_dir / f"{acc_names[i]}.pt"
                 epitope = torch.tensor(epitopes[i], dtype=torch.float32)
+                # print(epitope.shape)
                 embedding_data = {
                     'epitope': epitope,
                     'esm_representation': esm_representation
