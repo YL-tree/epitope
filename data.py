@@ -240,54 +240,62 @@ class Antigens():
 class ESM2Dataset(Dataset):
     def __init__(self, esm_files):
         self.esm_files = esm_files
-        self.esm_embeddings, self.epitope_labels = self.load_data()
+        self.accs, self.esm_embeddings, self.epitope_labels = self.load_data()
 
     def load_data(self):
         esm_embeddings = []
         epitope_labels = []
+        accs = []
         for esm_file in self.esm_files:
             data = torch.load(esm_file)
+            acc = data['acc']
             esm_embedding = data['esm_representation']
             epitope_label = data['epitope']
+            accs.append(acc)
             esm_embeddings.append(esm_embedding)
             epitope_labels.append(epitope_label)
-        return esm_embeddings, epitope_labels
+        return accs, esm_embeddings, epitope_labels
 
     def __len__(self):
         return len(self.esm_files)
 
     def __getitem__(self, idx):
+        acc = self.accs[idx]
         esm_embedding = self.esm_embeddings[idx]
         epitope_label = self.epitope_labels[idx]
-        return esm_embedding, epitope_label
+        return acc, esm_embedding, epitope_label
 
 class BepiPredDataset(Dataset):
     def __init__(self, bepi_files):
         self.bepi_files = bepi_files
-        self.esm_embeddings, self.epitope_labels, self.bepi_pred = self.load_data()
+        self.accs, self.esm_embeddings, self.epitope_labels, self.bepi_pred = self.load_data()
 
     def load_data(self):
+        accs = []
         esm_embeddings = []
         epitope_labels = []
         bepi_preds = []
         for bepi_file in self.bepi_files:
             data = torch.load(bepi_file)
+            acc = data['accession']
             esm_embedding = data['esm_embedding']
             epitope_label = data['epitope']
             bepi_pred = data['avg_prob']
+            accs.append(acc)
             esm_embeddings.append(esm_embedding)
             epitope_labels.append(epitope_label)
             bepi_preds.append(bepi_pred)
-        return esm_embeddings, epitope_labels, bepi_preds
+        return accs, esm_embeddings, epitope_labels, bepi_preds
 
     def __len__(self):
         return len(self.bepi_files)
 
     def __getitem__(self, idx):
+        acc = self.accs[idx]
         esm_embedding = self.esm_embeddings[idx]
         epitope_label = self.epitope_labels[idx]
         bepi_pred = self.bepi_pred[idx]
-        return esm_embedding, epitope_label, bepi_pred
+        return acc, esm_embedding, epitope_label, bepi_pred
 
 
 
