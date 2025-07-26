@@ -5,6 +5,7 @@ from scipy.stats import norm
 from pathlib import Path
 import esm
 import torch
+from torch.utils.data import Dataset, DataLoader
 
 
 
@@ -189,6 +190,7 @@ class Antigens():
 
         for b in batch_generator:
             batch_data = [(item[0], item[1]) for item in b]
+            seqs = [item[1] for item in b]
             epitopes = [item[2] for item in b]
             batch_labels, batch_strs, batch_tokens = batch_converter(batch_data)
             batch_lens = (batch_tokens != alphabet.padding_idx).sum(1)
@@ -211,10 +213,12 @@ class Antigens():
                 epitope = torch.tensor(epitopes[i], dtype=torch.float32)
                 # print(epitope.shape)
                 embedding_data = {
+                    'acc': acc_names[i],
+                    'seq': seqs[i],
                     'epitope': epitope,
                     'esm_representation': esm_representation
                 }
-                # 将acc, epitope, esm_representation均保存进pt文件
+                # 将acc, seq, epitope, esm_representation均保存进pt文件
                 torch.save(embedding_data, enc_path)
 
                 enc_paths.append(enc_path)
@@ -234,16 +238,15 @@ class Antigens():
         return new_X
 
 class ESM2Dataset(Dataset):
-    def __init__(self, esm_encoding_dir):
-        self.esm_encoding_dir = esm_encoding_dir
-        self.esm_files = [f for f in os.listdir(esm_encoding_dir) if f.endswith('.pt')]
+    def __init__(self, esm_files):
+        self.esm_files = esm_files
         self.esm_embeddings, self.epitope_labels = self.load_data()
 
     def load_data(self):
         esm_embeddings = []
         epitope_labels = []
         for esm_file in self.esm_files:
-            data = torch.load(self.esm_encoding_dir / esm_file)
+            data = torch.load(esm_file)
             esm_embedding = data['esm_representation']
             epitope_label = data['epitope']
             esm_embeddings.append(esm_embedding)
@@ -258,6 +261,33 @@ class ESM2Dataset(Dataset):
         epitope_label = self.epitope_labels[idx]
         return esm_embedding, epitope_label
 
+class BepiPredDataset(Dataset):
+    def __init__(self, bepi_files):
+        self.bepi_files = bepi_files
+        self.esm_embeddings, self.epitope_labels, self.bepi_pred = self.load_data()
+
+    def load_data(self):
+        esm_embeddings = []
+        epitope_labels = []
+        bepi_preds = []
+        for bepi_file in self.bepi_files:
+            data = torch.load(bepi_file)
+            esm_embedding = data['esm_embedding']
+            epitope_label = data['epitope']
+            bepi_pred = data['avg_prob']
+            esm_embeddings.append(esm_embedding)
+            epitope_labels.append(epitope_label)
+            bepi_preds.append(bepi_pred)
+        return esm_embeddings, epitope_labels, bepi_preds
+
+    def __len__(self):
+        return len(self.bepi_files)
+
+    def __getitem__(self, idx):
+        esm_embedding = self.esm_embeddings[idx]
+        epitope_label = self.epitope_labels[idx]
+        bepi_pred = self.bepi_pred[idx]
+        return esm_embedding, epitope_label, bepi_pred
 
 
 
