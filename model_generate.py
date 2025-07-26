@@ -20,22 +20,22 @@ from torch.nn.utils.rnn import pad_sequence
 
  
 class Diffusion:
-    def __init__(self, timesteps=1000, beta_start=0.0001, beta_end=0.02):
+    def __init__(self, device='cuda', timesteps=1000, beta_start=0.0001, beta_end=0.02):
         self.timesteps = timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
-        # self.device = device
+        self.device = device
         
-        # 线性噪声调度（公式4）
-        self.betas = torch.linspace(self.beta_start, self.beta_end, self.timesteps)
+        # Linear noise schedule
+        self.betas = torch.linspace(self.beta_start, self.beta_end, self.timesteps).to(device)
         self.alphas = 1. - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)  # ᾱ_t（公式4推导）
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.)
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)  # √ᾱ_t
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)  # √(1-ᾱ_t)
-    
-        # 后验q(x_{t-1}|x_t,x_0)的计算（公式7）
-        self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
+        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0).to(device)
+        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.).to(device)
+        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod).to(device)
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod).to(device)
+        
+        # Posterior variance calculation
+        self.posterior_variance = (self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)).to(device)
 
     def extract(self, a, t, x_shape):
         """从a中根据t提取系数并重塑使其能与x_shape广播"""
