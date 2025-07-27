@@ -68,11 +68,19 @@ def load_checkpoint(model, optimizer, checkpoint_path):
     return model, optimizer, epoch, loss
 
 ### train ###
-def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=3, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
+def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=700, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
+    # 查找最新的checkpoint
+    checkpoints = sorted(Path(checkpoint_dir).glob('checkpoint_epoch_*.pth'))
+    if checkpoints:
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoints[-1])
+        print(f"Loaded checkpoint from epoch {epoch} with loss {loss}")
+        start_epoch = epoch
+    else:
+        start_epoch = 0
     model.train()
     epochs_losses = []  # 记录每个epoch的平均损失
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
         loss_record= []
         for acc, esm, mask, bepi_pred, attention_mask in progress_bar:  # esm: 真实ESM嵌入 [B, L, D]
@@ -123,7 +131,7 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
     
 
 @torch.no_grad()
-def ddpm_sampling(model, diffusion, esm_seq, bepi_scores, attention_mask, num_steps=10):
+def ddpm_sampling(model, diffusion, esm_seq, bepi_scores, attention_mask, num_steps=1000):
     """
     Args:
         model: 训练好的 EpitopeTransformerDDPM 模型
@@ -184,6 +192,8 @@ def sample(model, diffusion, test_dataloader):
                     "mask": map_back_to_unit_range(clean),
                     "pred_mask": map_back_to_unit_range(pred),
                 }, save_path)
+
+
 
 
 

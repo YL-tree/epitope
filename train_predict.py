@@ -67,10 +67,18 @@ def load_checkpoint(model, optimizer, checkpoint_path):
 
 ### train ###
 def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=3, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
+    # 查找最新的checkpoint
+    checkpoints = sorted(Path(checkpoint_dir).glob('checkpoint_epoch_*.pth'))
+    if checkpoints:
+        model, optimizer, epoch, loss = load_checkpoint(model, optimizer, checkpoints[-1])
+        print(f"Loaded checkpoint from epoch {epoch} with loss {loss}")
+        start_epoch = epoch
+    else:
+        start_epoch = 0
     model.train()
     epochs_losses = []  # 记录每个epoch的平均损失
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
         loss_record= []
         for acc, esm, mask, attention_mask in progress_bar:  # esm: 真实ESM嵌入 [B, L, D]
@@ -100,8 +108,7 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
             
             # 5. 记录损失
             progress_bar.set_postfix({"loss": loss.item()})
-            epoch_loss = torch.tensor(loss_record).mean().item()
-
+        epoch_loss = torch.tensor(loss_record).mean().item()
         epochs_losses.append(epoch_loss)
         # 每15个epoch保存一次checkpoint
         if (epoch + 1) % 15 == 0:
@@ -115,7 +122,9 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
     plt.ylabel('Loss')
     plt.title('Training Loss')
     plt.savefig('loss.png')
+    plt.show()
     print(f"Full model saved to {model_path}")
+    plt.close()
 
     
 
