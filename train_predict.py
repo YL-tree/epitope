@@ -12,7 +12,10 @@ from tqdm import tqdm
 import random
 import math
 from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式后端
 import matplotlib.pyplot as plt
+
 
 random.seed(418)  # 设置种子值
 
@@ -66,7 +69,7 @@ def load_checkpoint(model, optimizer, checkpoint_path):
     return model, optimizer, epoch, loss
 
 ### train ###
-def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=3, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
+def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=500, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
     # 查找最新的checkpoint
     checkpoints = sorted(Path(checkpoint_dir).glob('checkpoint_epoch_*.pth'))
     if checkpoints:
@@ -89,7 +92,7 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
             # 1. 随机采样时间步和噪声
             t = torch.randint(0, steps, (mask.size(0),), device=device)
             noise = torch.randn_like(mask).to(device)
-            
+
             # 2. 前向加噪（根据噪声调度）
             noisy_mask = diffusion.q_sample(mask.unsqueeze(-1), t)
             t = t.float()
@@ -99,34 +102,34 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
 
             # 4. 计算表位分类损失
             loss = F.mse_loss(pred_noise, noise)
-            
+
             # 4. 反向传播
             optimizer.zero_grad()
             loss.backward()
             loss_record.append(loss.item())
             optimizer.step()
-            
-            # 5. 记录损失
+
+            loss_record.append(loss.item())
             progress_bar.set_postfix({"loss": loss.item()})
+
         epoch_loss = torch.tensor(loss_record).mean().item()
         epochs_losses.append(epoch_loss)
-        # 每15个epoch保存一次checkpoint
+
         if (epoch + 1) % 15 == 0:
             save_checkpoint(epoch + 1, model, optimizer, epoch_loss, checkpoint_dir)
-            print(f"Epoch {epoch + 1}, Loss_Mean: {epoch_loss}", end="\r")
-            
+            print(f"Epoch {epoch + 1}, Loss: {epoch_loss:.4f}")
+
     # 保存整个模型和最后的损失图
     torch.save(model, model_path)
     plt.plot(epochs_losses)
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
+    plt.xlabel('Epochs');
+    plt.ylabel('Loss');
     plt.title('Training Loss')
-    plt.savefig('loss.png')
-    plt.show()
-    print(f"Full model saved to {model_path}")
+    plt.savefig('loss.png');
     plt.close()
+    print(f"Model saved to {model_path}")
 
-    
+
 
 @torch.no_grad()
 def ddpm_sampling(model, diffusion, esm_seq, attention_mask, num_steps=10):
