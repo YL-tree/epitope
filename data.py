@@ -6,7 +6,14 @@ from pathlib import Path
 import esm
 import torch
 from torch.utils.data import Dataset, DataLoader
+import torch
 
+def map_to_infinite_range(x, mu=0, sigma=1):
+    # 处理边界情况，避免产生无限值
+    eps = torch.finfo(torch.float).eps
+    x = torch.clamp(x, eps, 1-eps)
+    
+    return torch.erfinv(2 * x - 1) * torch.sqrt(torch.tensor(2.)) * sigma + mu
 
 
 class Antigens():
@@ -141,11 +148,14 @@ class Antigens():
             # 如果有多个片段有值，则切割为多个片段
             segments = self.extract_response_frequency_segments(value)
             for idx, segment in enumerate(segments):
-                epitope_list.append(segment['response frequency'].tolist())
-                amino_list.append(segment['antigen'].tolist())
-                # position_list.append(segment['position'].tolist())
-                # sequences_length.append(len(segment['antigen']))
-                accs.append(acc + '_' + str(idx))
+                segment = segment.dropna(subset=['response frequency'])
+                # 当长度大于5时，保存数据
+                if len(segment) > 5:
+                    epitope_list.append(segment['response frequency'].tolist())
+                    amino_list.append(segment['antigen'].tolist())
+                    # position_list.append(segment['position'].tolist())
+                    # sequences_length.append(len(segment['antigen']))
+                    accs.append(acc + '_' + str(idx))
 
         self.check_accepted_AAs(accs, amino_list)
         # return x_list, y_list, position_list, sequences_length, accs
@@ -251,6 +261,7 @@ class ESM2Dataset(Dataset):
             acc = data['acc']
             esm_embedding = data['esm_representation']
             epitope_label = data['epitope']
+            epitope_label = map_to_infinite_range(epitope_label)
             accs.append(acc)
             esm_embeddings.append(esm_embedding)
             epitope_labels.append(epitope_label)

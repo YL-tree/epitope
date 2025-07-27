@@ -1,26 +1,19 @@
 ### Import ###
-from model_generate import BepiPredDDPM, Diffusion
-from model_update import DDPM_Predicet
+from model_update import DDPM_Predict, Diffusion
 from data import ESM2Dataset
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import matplotlib.pyplot as plt
+import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
-from torch import optim
 from torch.nn.utils.rnn import pad_sequence
 import os
-import pandas as pd
 from tqdm import tqdm
-import math
-from scipy.stats import norm
 import random
-import pathlib
+import math
 from pathlib import Path
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_recall_curve
+
 random.seed(418)  # 设置种子值
 
 ### SET GPU OR CPU ###
@@ -31,20 +24,26 @@ else:
     device = torch.device("cpu")
     print(f"GPU device not detected. Using CPU: {device}")
 
-### DataLoader ###
+def map_back_to_unit_range(y, mu=0.0, sigma=1.0):
+    return 0.5 * (1 + torch.erf((y - mu) / (sigma * torch.sqrt(torch.tensor(2.)))))
+
 def collate_fn(batch):
-    # 每个样本是 (acc, input_tensor, target_tensor)
-    acc = [item[0] for item in batch]
-    input_seqs = [item[1] for item in batch]
-    target_seqs = [item[2] for item in batch]
+    """
+    输入: batch 是一个列表，包含若干个 (acc, esm_embedding, epitope_label)
+    输出: padded 的 batch，包括 mask
+    """
+    accs, embeddings, labels = zip(*batch)
 
-    # 两个序列的长度是一样的，可以统一 pad 成 max_len
-    # 你也可以分别 pad（如果以后变成不一样长）
+    # pad_sequence 默认按第一维对齐，batch_first=True 输出形状为 (B, L, D)
+    padded_embeddings = pad_sequence(embeddings, batch_first=True)  # (B, L, D)
+    padded_labels = pad_sequence(labels, batch_first=True)          # (B, L)
 
-    input_padded = pad_sequence(input_seqs, batch_first=True, padding_value=0)
-    target_padded = pad_sequence(target_seqs, batch_first=True, padding_value=0)
+    # 创建 attention mask：True 表示有效位置，False 表示padding
+    attention_mask = torch.zeros_like(padded_labels, dtype=torch.bool)
+    for i, label in enumerate(labels):
+        attention_mask[i, :label.size(0)] = True
 
-    return acc, input_padded, target_padded
+    return accs, padded_embeddings, padded_labels, attention_mask
     
 
 ### checkpoint ###
@@ -67,27 +66,28 @@ def load_checkpoint(model, optimizer, checkpoint_path):
     return model, optimizer, epoch, loss
 
 ### train ###
-def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=300):
+def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=3, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
     model.train()
     epochs_losses = []  # 记录每个epoch的平均损失
 
     for epoch in range(epochs):
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
         loss_record= []
-        for acc, esm, mask in progress_bar:  # esm: 真实ESM嵌入 [B, L, D]
+        for acc, esm, mask, attention_mask in progress_bar:  # esm: 真实ESM嵌入 [B, L, D]
             esm = esm.to(device)
             mask = mask.to(device)
+            attention_mask = attention_mask.to(device)
 
             # 1. 随机采样时间步和噪声
             t = torch.randint(0, steps, (mask.size(0),), device=device)
-            noise = torch.randn_like(mask)
+            noise = torch.randn_like(mask).to(device)
             
             # 2. 前向加噪（根据噪声调度）
             noisy_mask = diffusion.q_sample(mask.unsqueeze(-1), t)
             t = t.float()
 
             # 3. 预测噪声并计算损失
-            pred_noise = model(noisy_mask, esm, t)
+            pred_noise = model(noisy_mask, esm, t, attention_mask)
 
             # 4. 计算表位分类损失
             loss = F.mse_loss(pred_noise, noise)
@@ -104,17 +104,23 @@ def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, ep
 
         epochs_losses.append(epoch_loss)
         # 每15个epoch保存一次checkpoint
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 15 == 0:
             save_checkpoint(epoch + 1, model, optimizer, epoch_loss, checkpoint_dir)
             print(f"Epoch {epoch + 1}, Loss_Mean: {epoch_loss}", end="\r")
-            plt.plot(epochs_losses)
-            plt.xlabel('Epochs')
-            plt.ylabel('Loss')
-            plt.title('Training Loss')
-            plt.show()
+            
+    # 保存整个模型和最后的损失图
+    torch.save(model, model_path)
+    plt.plot(epochs_losses)
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.title('Training Loss')
+    plt.savefig('loss.png')
+    print(f"Full model saved to {model_path}")
+
+    
 
 @torch.no_grad()
-def ddpm_sampling(model, diffusion, esm_seq, num_steps=1000):
+def ddpm_sampling(model, diffusion, esm_seq, attention_mask, num_steps=10):
     """
     Args:
         model: 训练好的 EpitopeTransformerDDPM 模型
@@ -133,13 +139,12 @@ def ddpm_sampling(model, diffusion, esm_seq, num_steps=1000):
     for t_index in range(num_steps - 1, -1, -1):
         t = torch.full((B,), t_index, device=device, dtype=torch.long)
         # 模型预测噪声
-        pred_noise = model(x_t, esm_seq, t).unsqueeze(-1)  # (B, L, 1)
+        pred_noise = model(x_t, esm_seq, t, attention_mask).unsqueeze(-1)  # (B, L, 1)
 
         x_t = diffusion.p_sample(x_t, pred_noise, t, t_index)
         
     # 输出最终 x0
     x0 = x_t.squeeze(-1)  # (B, L)
-    x0 = torch.sigmoid(x0)    # 保证在 [0,1] 概率范围（推荐）
 
     return x0  # 每个位点为表位的概率分布
 
@@ -151,21 +156,26 @@ def save_tensor(tensor, path):
 def sample(model, diffusion, test_dataloader):
     model.eval()
     with torch.no_grad():
-        all_masks = []
-        all_pred_masks = []
-        for acc, esm, mask in tqdm(test_dataloader, desc="Sampling Progress"):
+        for acc, esm, mask, attention_mask in tqdm(test_dataloader, desc="Sampling Progress"):
             esm = esm.to(device)
             mask = mask.to(device)
-            pred_mask = ddpm_sampling(model, diffusion, esm)
-            all_masks.append(mask.cpu().numpy())
-            all_pred_masks.append(pred_mask.cpu().numpy())
-            # 保存为以acc命名的pt文件中
-            if not os.path.exists("data/predict/"):
-                os.makedirs("data/predict/", exist_ok=True)
-            for idx, acc_item in enumerate(acc):
-                save_path = f"data/predict/{acc_item}.pt"
-                save_tensor(pred_mask[idx].cpu(), save_path)
-        return all_masks, all_pred_masks
+            attention_mask = attention_mask.to(device)
+
+            pred_mask = ddpm_sampling(model, diffusion, esm, attention_mask)
+
+            # 逐个样本处理
+            for idx in range(len(mask)):
+                valid_indices = attention_mask[idx].bool()
+                clean = mask[idx][valid_indices]
+                pred = pred_mask[idx][valid_indices]
+
+                save_path = f"data/predict/{acc[idx]}.pt"
+                save_tensor({
+                    "acc": acc[idx],
+                    "mask": map_back_to_unit_range(clean),
+                    "pred_mask": map_back_to_unit_range(pred),
+                }, save_path)
+
 
 
 if __name__ == "__main__":
@@ -184,18 +194,10 @@ if __name__ == "__main__":
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
     
-    DDPM_Predicet_model = DDPM_Predicet()
+    DDPM_Predicet_model = DDPM_Predict()
     diffusion = Diffusion()
-    optimizer = optim.Adam(DDPM_Predicet_model.parameters(), lr=0.001)
+    optimizer = optim.Adam(DDPM_Predicet_model.parameters(), lr=0.0001)
 
     train(DDPM_Predicet_model, train_ESM_2_dataloader, diffusion, optimizer)
     
-    masks, pred_masks = sample(DDPM_Predicet_model, diffusion, test_ESM_2_dataloader)
-    # 保存整个模型
-    def save_full_model(model, path):
-        torch.save(model, path)
-        print(f"Full model saved to {path}")
-
-    save_full_model(DDPM_Predicet_model, "full_model.pth")
-
-    
+    sample(DDPM_Predicet_model, diffusion, test_ESM_2_dataloader)

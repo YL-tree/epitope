@@ -19,56 +19,6 @@ from torchvision import datasets, transforms
 from torch.nn.utils.rnn import pad_sequence
 
  
-class Diffusion:
-    def __init__(self, device='cuda', timesteps=1000, beta_start=0.0001, beta_end=0.02):
-        self.timesteps = timesteps
-        self.beta_start = beta_start
-        self.beta_end = beta_end
-        self.device = device
-        
-        # Linear noise schedule
-        self.betas = torch.linspace(self.beta_start, self.beta_end, self.timesteps).to(device)
-        self.alphas = 1. - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0).to(device)
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.).to(device)
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod).to(device)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod).to(device)
-        
-        # Posterior variance calculation
-        self.posterior_variance = (self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)).to(device)
-
-    def extract(self, a, t, x_shape):
-        """从a中根据t提取系数并重塑使其能与x_shape广播"""
-        batch_size = t.shape[0]
-        out = a.gather(-1, t)
-        return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
-
-    def q_sample(self, x_start, t, noise=None):
-        """前向扩散过程：q(x_t | x_0)（公式4推导）"""
-        if noise is None:
-            noise = torch.randn_like(x_start)
-            
-        sqrt_alphas_cumprod_t = self.extract(self.sqrt_alphas_cumprod, t, x_start.shape)
-        sqrt_one_minus_alphas_cumprod_t = self.extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
-        
-        return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
-    
-    def p_sample(self, x, pred_noise, t, t_index):
-        """反向扩散过程：p(x_{t-1} | x_t)（公式11）"""
-        betas_t = self.extract(self.betas, t, x.shape)
-        sqrt_one_minus_alphas_cumprod_t = self.extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape)
-        sqrt_recip_alphas_t = self.extract(torch.sqrt(1.0 / self.alphas), t, x.shape)
-        
-        # 论文中的公式11
-        model_mean = sqrt_recip_alphas_t * (x - betas_t * pred_noise / sqrt_one_minus_alphas_cumprod_t)
-        if t_index == 0:
-            return model_mean
-        else:
-            posterior_variance_t = self.extract(self.posterior_variance, t, x.shape)
-            noise = torch.randn_like(x)
-            return model_mean + torch.sqrt(posterior_variance_t) * noise
-
-      
 
 class MyDenseNetWithSeqLen(nn.Module):
     def __init__(self,
