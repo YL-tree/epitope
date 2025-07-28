@@ -11,6 +11,8 @@ import os
 from tqdm import tqdm
 import random
 from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式后端
 import matplotlib.pyplot as plt
 
 random.seed(418)  # 设置种子值
@@ -68,7 +70,7 @@ def load_checkpoint(model, optimizer, checkpoint_path):
     return model, optimizer, epoch, loss
 
 ### train ###
-def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=700, checkpoint_dir="./checkpoints", model_path="full_model.pth"):
+def train(model, dataloader, diffusion, optimizer, steps=1000, device=device, epochs=700, checkpoint_dir="./checkpoints_enhance", model_path="full_model_enhance.pth"):
     # 查找最新的checkpoint
     checkpoints = sorted(Path(checkpoint_dir).glob('checkpoint_epoch_*.pth'))
     if checkpoints:

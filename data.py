@@ -257,7 +257,7 @@ class ESM2Dataset(Dataset):
         epitope_labels = []
         accs = []
         for esm_file in self.esm_files:
-            data = torch.load(esm_file)
+            data = torch.load(esm_file, weights_only=False)
             acc = data['acc']
             esm_embedding = data['esm_representation']
             epitope_label = data['epitope']
@@ -287,7 +287,7 @@ class BepiPredDataset(Dataset):
         epitope_labels = []
         bepi_preds = []
         for bepi_file in self.bepi_files:
-            data = torch.load(bepi_file)
+            data = torch.load(bepi_file, weights_only=False)
             acc = data['accession']
             esm_embedding = data['esm_embedding']
             epitope_label = data['epitope']

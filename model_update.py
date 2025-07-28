@@ -136,7 +136,7 @@ class DDPM_enhance(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).to(device)
 
         # Output projection
-        self.output_proj = nn.Linear(emb_dim, 1)  # Predict noise or mask value
+        self.output_proj = nn.Linear(emb_dim, 1).to(device)  # Predict noise or mask value
 
 
     def forward(self, noisy_mask, seq, bepi_scores, t, attention_mask=None):
