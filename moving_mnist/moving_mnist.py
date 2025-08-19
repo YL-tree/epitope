@@ -87,7 +87,7 @@ def train():
     diffusion = Diffusion()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    for epoch in range(10):
+    for epoch in range(500):
         for batch in tqdm(dataloader):
             x = batch.to(device)  # (B, 20, 1, 64, 64)  
 
