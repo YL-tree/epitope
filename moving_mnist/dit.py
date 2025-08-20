@@ -30,58 +30,58 @@ class SinusoidalPosEmb(nn.Module):
 # -----------------------
 # Patchify / Unpatchify
 # -----------------------
-class PatchEmbed(nn.Module):
-    """
-    Patchify and linear embedding.
-    Input: latents of shape [B, C, H, W]
-    Splits into patches of size patch_size x patch_size, flatten each patch and linear-project to embed_dim.
-    Output tokens: [B, N, embed_dim], where N = (H//p)*(W//p)
-    """
-    def __init__(self, in_channels, embed_dim, patch_size):
-        super().__init__()
-        self.in_channels = in_channels
-        self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        # We'll implement patchify as a conv with stride=patch_size, kernel=patch_size
-        self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+# class PatchEmbed(nn.Module):
+#     """
+#     Patchify and linear embedding.
+#     Input: latents of shape [B, C, H, W]
+#     Splits into patches of size patch_size x patch_size, flatten each patch and linear-project to embed_dim.
+#     Output tokens: [B, N, embed_dim], where N = (H//p)*(W//p)
+#     """
+#     def __init__(self, in_channels, embed_dim, patch_size):
+#         super().__init__()
+#         self.in_channels = in_channels
+#         self.embed_dim = embed_dim
+#         self.patch_size = patch_size
+#         # We'll implement patchify as a conv with stride=patch_size, kernel=patch_size
+#         self.proj = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
 
-    def forward(self, x):
-        # x: [B, C, H, W]
-        x = self.proj(x)  # [B, embed_dim, H/p, W/p]
-        B, D, Hs, Ws = x.shape
-        x = x.flatten(2).transpose(1, 2)  # -> [B, N, D] where N = Hs*Ws
-        return x, (Hs, Ws)
+#     def forward(self, x):
+#         # x: [B, C, H, W]
+#         x = self.proj(x)  # [B, embed_dim, H/p, W/p]
+#         B, D, Hs, Ws = x.shape
+#         x = x.flatten(2).transpose(1, 2)  # -> [B, N, D] where N = Hs*Ws
+#         return x, (Hs, Ws)
 
 
-class Unpatchify(nn.Module):
-    """
-    Convert tokens [B, N, embed_dim] back to [B, C, H, W] roughly by ConvTranspose
-    We'll map embed_dim -> out_channels with ConvTranspose2d
-    """
-    def __init__(self, embed_dim, out_channels, patch_size, out_hw=None):
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.out_channels = out_channels
-        self.patch_size = patch_size
-        # We'll use a simple conv transpose that reverses PatchEmbed
-        self.deproj = nn.ConvTranspose2d(embed_dim, out_channels,
-                                         kernel_size=patch_size,
-                                         stride=patch_size)
+# class Unpatchify(nn.Module):
+#     """
+#     Convert tokens [B, N, embed_dim] back to [B, C, H, W] roughly by ConvTranspose
+#     We'll map embed_dim -> out_channels with ConvTranspose2d
+#     """
+#     def __init__(self, embed_dim, out_channels, patch_size, out_hw=None):
+#         super().__init__()
+#         self.embed_dim = embed_dim
+#         self.out_channels = out_channels
+#         self.patch_size = patch_size
+#         # We'll use a simple conv transpose that reverses PatchEmbed
+#         self.deproj = nn.ConvTranspose2d(embed_dim, out_channels,
+#                                          kernel_size=patch_size,
+#                                          stride=patch_size)
 
-    def forward(self, tokens, spatial_shape):
-        # tokens: [B, N, D], spatial_shape: (Hs, Ws) where Hs = H/patch
-        B, N, D = tokens.shape
-        Hs, Ws = spatial_shape
-        x = tokens.transpose(1, 2).reshape(B, D, Hs, Ws)  # [B, D, Hs, Ws]
-        x = self.deproj(x)  # [B, out_channels, H, W]
-        return x
+#     def forward(self, tokens, spatial_shape):
+#         # tokens: [B, N, D], spatial_shape: (Hs, Ws) where Hs = H/patch
+#         B, N, D = tokens.shape
+#         Hs, Ws = spatial_shape
+#         x = tokens.transpose(1, 2).reshape(B, D, Hs, Ws)  # [B, D, Hs, Ws]
+#         x = self.deproj(x)  # [B, out_channels, H, W]
+#         return x
 
 # -----------------------
 # Full DiT Model
 # -----------------------
 class DiT(nn.Module):
     def __init__(self,
-                 in_channels=4,       # latent channels (e.g., 4)
+                 image_size=4,       # latent channels (e.g., 4)
                  embed_dim=512,       # transformer hidden dim
                  patch_size=1,
                  depth=12,
@@ -92,15 +92,18 @@ class DiT(nn.Module):
                  out_channels=4,       # predict noise channels (same as in_channels)
                  ):
         super().__init__()
-        self.in_channels = in_channels
+        self.image_size = image_size
         self.embed_dim = embed_dim
         self.patch_size = patch_size
         self.depth = depth
         self.num_heads = num_heads
 
         # Patchify
-        self.patch_embed = PatchEmbed(in_channels, embed_dim, patch_size)
-        self.unpatchify = Unpatchify(embed_dim, out_channels, patch_size)
+        # self.patch_embed = PatchEmbed(in_channels, embed_dim, patch_size)
+        # self.unpatchify = Unpatchify(embed_dim, out_channels, patch_size)
+
+        # Patch embedding
+        self.patch_embed = nn.Linear(patch_size**2, embed_dim)
 
         # optional class embedding
         self.num_classes = num_classes
@@ -126,12 +129,36 @@ class DiT(nn.Module):
         self.final_ln = nn.LayerNorm(embed_dim)
         # Two heads: predict noise and predict sigma (optional)
         # 修复：将输出维度改为embed_dim，与Unpatchify的输入要求匹配
-        self.noise_head = nn.Linear(embed_dim, embed_dim)
-        self.sigma_head = nn.Linear(embed_dim, embed_dim)
-
+        self.output_head = nn.Linear(embed_dim, patch_size)
+       
         # init heads small
-        nn.init.zeros_(self.noise_head.bias)
-        nn.init.zeros_(self.sigma_head.bias)
+        nn.init.zeros_(self.output_head.bias)
+      
+    # ===== Patchify =====
+    def patchify(self, x):
+        """
+        x: [B, 1, H, W]
+        return: [B, N, patch_dim]
+        """
+        B, C, H, W = x.shape
+        p = self.patch_size
+        patches = x.unfold(2, p, p).unfold(3, p, p)   # [B, C, H/p, W/p, p, p]
+        patches = patches.contiguous().view(B, -1, p * p)  # [B, N, patch_dim]
+        return patches
+
+    # ===== Unpatchify =====
+    def unpatchify(self, patches):
+        """
+        patches: [B, N, patch_dim]
+        return: [B, 1, H, W]
+        """
+        B, N, D = patches.shape
+        p = self.patch_size
+        h = w = int(self.image_size // p)
+        patches = patches.view(B, h, w, p, p)
+        x = patches.permute(0, 3, 1, 4, 2).contiguous().view(B, 1, self.image_size, self.image_size)
+        return x
+
 
     def forward(self, latents, timesteps, labels=None):
         """
@@ -143,7 +170,15 @@ class DiT(nn.Module):
           pred_sigma: [B, C, H, W]
         """
         B = latents.shape[0]
-        tokens, spatial = self.patch_embed(latents)  # [B, N, D], (Hs, Ws)
+        H, W = latents.shape[2], latents.shape[3]
+
+        tokens = self.patchify(latents)  # [B, N, D], (Hs, Ws)
+        N = tokens.shape[1]
+        # Patch embedding
+        tokens = self.patch_embed(tokens)  # [B, N, embed_dim]
+
+
+
         # Conditioning embedding
         t_emb = self.time_emb(timesteps)  # [B, t_dim]
         t_emb = self.time_mlp(t_emb)      # [B, embed_dim]
@@ -164,12 +199,10 @@ class DiT(nn.Module):
 
         # heads: produce per-token outputs which we unpatchify
         # 修复：直接输出embed_dim维度的token
-        noise_tokens = self.noise_head(x)  # [B, N, embed_dim]
-        sigma_tokens = self.sigma_head(x)  # [B, N, embed_dim]
+        output_tokens = self.output_head(x)  # [B, N, embed_dim]
 
         # 简化：直接传递给unpatchify，无需复杂reshape
-        pred_noise = self.unpatchify(noise_tokens, spatial)  # [B, out_channels, H, W]
-        pred_sigma = self.unpatchify(sigma_tokens, spatial)
+        pred_noise = self.unpatchify(output_tokens)  # [B, out_channels, H, W]
 
         return pred_noise
 
@@ -181,7 +214,7 @@ if __name__ == "__main__":
     B = 2
     C = 4
     H = W = 32
-    model = DiT(in_channels=C, embed_dim=256, patch_size=1, depth=6, num_heads=8, num_classes=10, out_channels=C)
+    model = DiT(image_size=H, embed_dim=256, patch_size=4, depth=6, num_heads=8, num_classes=10, out_channels=C)
     latents = torch.randn(B, C, H, W)
     timesteps = torch.randint(0, 1000, (B,))
     labels = torch.randint(0, 10, (B,))
