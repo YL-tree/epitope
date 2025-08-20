@@ -89,7 +89,7 @@ class DiT(nn.Module):
                  mlp_ratio=4.0,
                  timestep_emb_dim=512,
                  num_classes=None,    # if conditional on class labels
-                 out_channels=4       # predict noise channels (same as in_channels)
+                 out_channels=4,       # predict noise channels (same as in_channels)
                  ):
         super().__init__()
         self.in_channels = in_channels
