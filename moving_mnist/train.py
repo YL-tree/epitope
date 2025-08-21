@@ -24,6 +24,17 @@ except:
 optimzer=torch.optim.Adam(model.parameters(),lr=1e-3)   # 优化器
 loss_fn=nn.L1Loss() # 损失函数(绝对值误差均值)
 
+# 初始化损失图保存函数
+def save_loss_plot(loss_list):
+    plt.figure(figsize=(10, 6))
+    plt.plot(loss_list, label='Training Loss')
+    plt.xlabel('Iterations')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Time')
+    plt.legend()
+    plt.savefig('loss_plot.png')
+    plt.close()
+
 if __name__ == '__main__':
     EPOCH=500
     BATCH_SIZE=300
@@ -32,6 +43,8 @@ if __name__ == '__main__':
 
     model.train()
     iter_count=0
+    # 初始化损失列表
+    loss_list=[]
     for epoch in tqdm(range(EPOCH), desc='Training', unit='epoch'):  # 添加进度条
         for imgs,labels in dataloader:
             x=imgs*2-1 # 图像的像素范围从[0,1]转换到[-1,1],和噪音高斯分布范围对应
@@ -42,6 +55,8 @@ if __name__ == '__main__':
             pred_noise=model(x.to(DEVICE),t.to(DEVICE),y.to(DEVICE))
         
             loss=loss_fn(pred_noise,noise.to(DEVICE))
+            # 记录损失
+            loss_list.append(loss.item())  
             
             optimzer.zero_grad()
             loss.backward()
@@ -52,3 +67,6 @@ if __name__ == '__main__':
                 torch.save(model.state_dict(),'.model.pth')
                 os.replace('.model.pth','model.pth')
             iter_count+=1
+    
+    # 训练完成后，保存损失图
+    save_loss_plot(loss_list)
