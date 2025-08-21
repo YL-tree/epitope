@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dit_block import DiTBlock
+
+
 # -----------------------
 # Utilities / Embeddings
 # -----------------------
@@ -76,136 +78,121 @@ class SinusoidalPosEmb(nn.Module):
 #         x = self.deproj(x)  # [B, out_channels, H, W]
 #         return x
 
+    
 # -----------------------
-# Full DiT Model
+# DiT (最小可训练版本)
 # -----------------------
 class DiT(nn.Module):
     def __init__(self,
-                 image_size=4,       # latent channels (e.g., 4)
-                 embed_dim=512,       # transformer hidden dim
-                 patch_size=1,
-                 depth=12,
+                 image_size=28,
+                 in_channels=1,
+                 patch_size=4,
+                 embed_dim=256,
+                 depth=6,
                  num_heads=8,
                  mlp_ratio=4.0,
-                 timestep_emb_dim=512,
-                 num_classes=None,    # if conditional on class labels
-                 out_channels=4,       # predict noise channels (same as in_channels)
+                 timestep_emb_dim=256,
+                 num_classes=None,   # 如果有类条件
+                 out_channels=None   # 默认 = in_channels
                  ):
         super().__init__()
-        self.image_size = image_size
-        self.embed_dim = embed_dim
-        self.patch_size = patch_size
-        self.depth = depth
-        self.num_heads = num_heads
-
-        # Patchify
-        # self.patch_embed = PatchEmbed(in_channels, embed_dim, patch_size)
-        # self.unpatchify = Unpatchify(embed_dim, out_channels, patch_size)
-
-        # Patch embedding
-        self.patch_embed = nn.Linear(patch_size**2, embed_dim)
-
-        # optional class embedding
+        self.image_size  = image_size
+        self.in_channels = in_channels
+        self.patch_size  = patch_size
+        self.embed_dim   = embed_dim
         self.num_classes = num_classes
-        if num_classes is not None:
-            self.class_emb = nn.Embedding(num_classes, embed_dim)
-        else:
-            self.class_emb = None
+        self.out_channels = out_channels or in_channels
 
-        # timestep embedding (sinusoidal + MLP to project to embed_dim)
+        assert image_size % patch_size == 0, "image_size 必须能被 patch_size 整除"
+        self.h_patches = image_size // patch_size
+        self.w_patches = image_size // patch_size
+        self.num_patches = self.h_patches * self.w_patches
+
+        # 每个 token 的原始维度（像素展平）
+        self.patch_dim_in  = in_channels  * patch_size * patch_size
+        self.patch_dim_out = self.out_channels * patch_size * patch_size
+
+        # token 投影
+        self.token_proj = nn.Linear(self.patch_dim_in, embed_dim)
+
+        # 条件嵌入 (time + optional class)
         self.time_emb = SinusoidalPosEmb(timestep_emb_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(timestep_emb_dim, embed_dim),
             nn.GELU(),
-            nn.Linear(embed_dim, embed_dim)
+            nn.Linear(embed_dim, embed_dim),
         )
+        self.class_emb = nn.Embedding(num_classes, embed_dim) if num_classes is not None else None
 
-        # trunk: stack of DiTBlocks
+        # Transformer trunk
         self.blocks = nn.ModuleList([
-            DiTBlock(embed_dim, num_heads, mlp_ratio) for _ in range(depth)
+            DiTBlock(embed_dim, num_heads, mlp_ratio, gate_scale=0.1)
+            for _ in range(depth)
         ])
+        self.final_ln  = nn.LayerNorm(embed_dim)
 
-        # final norm and head
-        self.final_ln = nn.LayerNorm(embed_dim)
-        # Two heads: predict noise and predict sigma (optional)
-        # 修复：将输出维度改为embed_dim，与Unpatchify的输入要求匹配
-        self.output_head = nn.Linear(embed_dim, patch_size)
-       
-        # init heads small
-        nn.init.zeros_(self.output_head.bias)
-      
-    # ===== Patchify =====
+        # 输出 head：把 token 从 embed_dim 映回 patch 像素
+        self.noise_head = nn.Linear(embed_dim, self.patch_dim_out)
+        nn.init.zeros_(self.noise_head.bias)
+
+    # ===== Patchify (保留通道) =====
     def patchify(self, x):
         """
-        x: [B, 1, H, W]
-        return: [B, N, patch_dim]
+        x: [B, C, H, W]
+        return: tokens [B, N, C*p*p]
         """
         B, C, H, W = x.shape
         p = self.patch_size
-        patches = x.unfold(2, p, p).unfold(3, p, p)   # [B, C, H/p, W/p, p, p]
-        patches = patches.contiguous().view(B, -1, p * p)  # [B, N, patch_dim]
-        return patches
+        h = H // p
+        w = W // p
+        # [B, C, h, p, w, p] -> [B, h, w, C, p, p] -> [B, N, C*p*p]
+        x = x.reshape(B, C, h, p, w, p).permute(0, 2, 4, 1, 3, 5).contiguous()
+        tokens = x.reshape(B, h * w, C * p * p)
+        return tokens
 
-    # ===== Unpatchify =====
-    def unpatchify(self, patches):
+    # ===== Unpatchify (还原通道和空间) =====
+    def unpatchify(self, tokens):
         """
-        patches: [B, N, patch_dim]
-        return: [B, 1, H, W]
+        tokens: [B, N, C*p*p] (这里的 C 是 out_channels)
+        return: [B, C, H, W]
         """
-        B, N, D = patches.shape
+        B, N, D = tokens.shape
         p = self.patch_size
-        h = w = int(self.image_size // p)
-        patches = patches.view(B, h, w, p, p)
-        x = patches.permute(0, 3, 1, 4, 2).contiguous().view(B, 1, self.image_size, self.image_size)
+        h = self.h_patches
+        w = self.w_patches
+        C = self.out_channels
+        assert N == h * w and D == C * p * p, f"tokens 形状不匹配{N}, {h}, {w}, {C}, {p}"
+        x = tokens.reshape(B, h, w, C, p, p).permute(0, 3, 1, 4, 2, 5).contiguous()
+        x = x.reshape(B, C, h * p, w * p)
         return x
-
 
     def forward(self, latents, timesteps, labels=None):
         """
-        latents: [B, C, H, W] (noised latents)
-        timesteps: [B] (long tensor)
-        labels: [B] (optional)
-        returns:
-          pred_noise: [B, C, H, W]
-          pred_sigma: [B, C, H, W]
+        latents:   [B, C_in, H, W] (加噪图像/潜变量)
+        timesteps: [B] (long/int)
+        labels:    [B] (optional class)
+        return:
+          pred_noise: [B, C_out, H, W]
         """
-        B = latents.shape[0]
-        H, W = latents.shape[2], latents.shape[3]
+        # 1) patchify → token_proj
+        tokens = self.patchify(latents)                    # [B, N, C_in*p*p]
+        x = self.token_proj(tokens)                        # [B, N, D]
 
-        tokens = self.patchify(latents)  # [B, N, D], (Hs, Ws)
-        N = tokens.shape[1]
-        # Patch embedding
-        tokens = self.patch_embed(tokens)  # [B, N, embed_dim]
+        # 2) 条件嵌入
+        t_emb = self.time_mlp(self.time_emb(timesteps))    # [B, D]
+        cond = t_emb
+        if (self.class_emb is not None) and (labels is not None):
+            cond = cond + self.class_emb(labels)           # [B, D]
 
-
-
-        # Conditioning embedding
-        t_emb = self.time_emb(timesteps)  # [B, t_dim]
-        t_emb = self.time_mlp(t_emb)      # [B, embed_dim]
-
-        if self.class_emb is not None and labels is not None:
-            c_emb = self.class_emb(labels)  # [B, embed_dim]
-            cond = t_emb + c_emb
-        else:
-            cond = t_emb  # [B, embed_dim]
-
-        # Pass through DiT blocks
-        x = tokens  # [B, N, D]
+        # 3) Transformer trunk
         for blk in self.blocks:
-            x = blk(x, cond)  # cond broadcast inside block to per-token shift/scale
+            x = blk(x, cond)
+        x = self.final_ln(x)
 
-        # final transform
-        x = self.final_ln(x)  # [B, N, D]
-
-        # heads: produce per-token outputs which we unpatchify
-        # 修复：直接输出embed_dim维度的token
-        output_tokens = self.output_head(x)  # [B, N, embed_dim]
-
-        # 简化：直接传递给unpatchify，无需复杂reshape
-        pred_noise = self.unpatchify(output_tokens)  # [B, out_channels, H, W]
-
+        # 4) 输出 head → unpatchify
+        noise_tokens = self.noise_head(x)                  # [B, N, C_out*p*p]
+        pred_noise   = self.unpatchify(noise_tokens)       # [B, C_out, H, W]
         return pred_noise
-
 
 # -----------------------
 # Example usage / Dummy run
@@ -214,7 +201,7 @@ if __name__ == "__main__":
     B = 2
     C = 4
     H = W = 32
-    model = DiT(image_size=H, embed_dim=256, patch_size=4, depth=6, num_heads=8, num_classes=10, out_channels=C)
+    model = DiT(image_size=H, in_channels=C, embed_dim=256, patch_size=1, depth=6, num_heads=8, num_classes=10, out_channels=C)
     latents = torch.randn(B, C, H, W)
     timesteps = torch.randint(0, 1000, (B,))
     labels = torch.randint(0, 10, (B,))
