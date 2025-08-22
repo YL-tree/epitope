@@ -12,7 +12,7 @@ DEVICE='cuda' if torch.cuda.is_available() else 'cpu' # 设备
 
 dataset=MNIST() # 数据集
 
-model = DiT(image_size=28, embed_dim=64, patch_size=4, depth=3, num_heads=4, num_classes=10, out_channels=1).to(DEVICE)
+model = DiT(img_size=28,patch_size=4,channel=1,emb_size=64,label_num=10,dit_num=3,head=4).to(DEVICE)
 
 # model=DiT(img_size=28,patch_size=4,channel=1,emb_size=64,label_num=10,dit_num=3,head=4).to(DEVICE) # 模型
 
